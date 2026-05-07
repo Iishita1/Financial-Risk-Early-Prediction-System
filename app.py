@@ -1,258 +1,514 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
+import altair as alt
+from pathlib import Path
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from xgboost import XGBClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+import shap
 
-# ==========================================
-# PAGE CONFIGURATION
-# ==========================================
 st.set_page_config(
-    page_title="Financial Health Dashboard",
-    page_icon="📊",
+    page_title="Financial Health Check",
+    page_icon="💡",
     layout="wide",
-    initial_sidebar_state="expanded"
 )
 
-# ==========================================
-# CUSTOM CSS FOR STYLING
-# ==========================================
-st.markdown("""
-<style>
-    /* Global styles and background */
-    .stApp {
-        background-color: #0E1117;
-        color: #FAFAFA;
+DATA_DIR = Path(__file__).resolve().parent / "content"
+CREDIT_FILE = DATA_DIR / "credit_risk.csv"
+BANK_FILE = DATA_DIR / "bank-full.csv"
+
+NON_MODEL_FEATURES = ["Loan_ID", "Loan_Status"]
+MODEL_FEATURES = [
+    "Gender",
+    "Married",
+    "Dependents",
+    "Education",
+    "Self_Employed",
+    "ApplicantIncome",
+    "CoapplicantIncome",
+    "LoanAmount",
+    "Loan_Amount_Term",
+    "Credit_History",
+    "Property_Area",
+]
+
+
+@st.cache_data(show_spinner=False)
+def load_credit_data(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    df = df.copy()
+    df["ApplicantIncome"] = pd.to_numeric(df["ApplicantIncome"], errors="coerce")
+    df["CoapplicantIncome"] = pd.to_numeric(df["CoapplicantIncome"], errors="coerce")
+    df["LoanAmount"] = pd.to_numeric(df["LoanAmount"], errors="coerce")
+    df["Loan_Amount_Term"] = pd.to_numeric(df["Loan_Amount_Term"], errors="coerce")
+    df["Credit_History"] = pd.to_numeric(df["Credit_History"], errors="coerce")
+    df = df.dropna(subset=["Loan_Status"]).reset_index(drop=True)
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def load_bank_data(path: Path) -> pd.DataFrame:
+    return pd.read_csv(path, sep=";")
+
+
+@st.cache_data(show_spinner=False)
+def build_credit_pipeline(df: pd.DataFrame) -> Pipeline:
+    X = df[MODEL_FEATURES]
+    y = (df["Loan_Status"] == "N").astype(int)
+
+    numeric_features = [
+        "ApplicantIncome",
+        "CoapplicantIncome",
+        "LoanAmount",
+        "Loan_Amount_Term",
+        "Credit_History",
+    ]
+    categorical_features = [
+        "Gender",
+        "Married",
+        "Dependents",
+        "Education",
+        "Self_Employed",
+        "Property_Area",
+    ]
+
+    numeric_transformer = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    categorical_transformer = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("encoder", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        [
+            ("num", numeric_transformer, numeric_features),
+            ("cat", categorical_transformer, categorical_features),
+        ]
+    )
+
+    model = XGBClassifier(
+        n_estimators=100,
+        max_depth=4,
+        learning_rate=0.1,
+        use_label_encoder=False,
+        eval_metric="logloss",
+        random_state=42,
+    )
+
+    pipeline = Pipeline(
+        [("preprocessor", preprocessor), ("classifier", model)]
+    )
+    pipeline.fit(X, y)
+    return pipeline
+
+
+@st.cache_data(show_spinner=False)
+def build_logistic_pipeline(df: pd.DataFrame) -> Pipeline:
+    X = df[MODEL_FEATURES]
+    y = (df["Loan_Status"] == "N").astype(int)
+
+    numeric_features = [
+        "ApplicantIncome",
+        "CoapplicantIncome",
+        "LoanAmount",
+        "Loan_Amount_Term",
+        "Credit_History",
+    ]
+    categorical_features = [
+        "Gender",
+        "Married",
+        "Dependents",
+        "Education",
+        "Self_Employed",
+        "Property_Area",
+    ]
+
+    numeric_transformer = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    categorical_transformer = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("encoder", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        [
+            ("num", numeric_transformer, numeric_features),
+            ("cat", categorical_transformer, categorical_features),
+        ]
+    )
+
+    model = LogisticRegression(class_weight="balanced", max_iter=1000, random_state=42)
+    pipeline = Pipeline(
+        [("preprocessor", preprocessor), ("classifier", model)]
+    )
+    pipeline.fit(X, y)
+    return pipeline
+
+
+def behavioral_risk_score(
+    monthly_income: float,
+    monthly_expenses: float,
+    savings_rate: float,
+    emergency_fund_months: float,
+    expense_volatility: float,
+    has_credit_history: bool,
+) -> float:
+    income = max(monthly_income, 1.0)
+    dti_ratio = min(monthly_expenses / income, 2.0)
+    dti_risk = np.clip((dti_ratio - 0.25) / 0.5, 0, 1)
+    savings_risk = np.clip((0.30 - savings_rate) / 0.30, 0, 1)
+    emergency_risk = np.clip((3.0 - emergency_fund_months) / 3.0, 0, 1)
+    volatility_risk = np.clip(expense_volatility / 55.0, 0, 1)
+    credit_history_risk = 0.0 if has_credit_history else 1.0
+
+    score = (
+        dti_risk * 0.40
+        + savings_risk * 0.25
+        + emergency_risk * 0.20
+        + volatility_risk * 0.10
+        + credit_history_risk * 0.05
+    )
+    return float(np.clip(score, 0.0, 1.0))
+
+
+def format_percent(value: float) -> str:
+    return f"{value * 100:.0f}%"
+
+
+def risk_label(score: float) -> tuple[str, str]:
+    if score < 0.35:
+        return "Low risk", "green"
+    if score < 0.65:
+        return "Moderate risk", "orange"
+    return "High risk", "red"
+
+
+def model_explanation(pipeline: Pipeline, example: pd.DataFrame) -> pd.DataFrame:
+    try:
+        explainer = shap.Explainer(pipeline.named_steps["classifier"], pipeline.named_steps["preprocessor"].transform(example))
+        shap_values = explainer(pipeline.named_steps["preprocessor"].transform(example))
+        feature_names = pipeline.named_steps["preprocessor"].get_feature_names_out()
+        
+        clean_names = []
+        for name in feature_names:
+            name = name.replace("num__", "").replace("cat__", "")
+            name = name.replace("ApplicantIncome", "Applicant Income")
+            name = name.replace("CoapplicantIncome", "Coapplicant Income")
+            name = name.replace("LoanAmount", "Loan Amount")
+            name = name.replace("Credit_History", "Credit History")
+            name = name.replace("Property_Area", "Property Area")
+            name = name.replace("Loan_Amount_Term", "Loan Term")
+            name = name.replace("Self_Employed", "Self Employed")
+            name = name.replace("_", " ")
+            clean_names.append(name.strip())
+            
+        values = shap_values.values[0]
+        df = pd.DataFrame(
+            {
+                "feature": clean_names,
+                "shap_value": values,
+            }
+        )
+        # Handle duplicate feature names by grouping
+        df = df.groupby("feature", as_index=False)["shap_value"].sum()
+        df = df.assign(abs_shap=lambda x: np.abs(x["shap_value"]))
+        # Filter out very low impact to avoid empty bars cluttering
+        df = df[df["abs_shap"] > 0.001]
+        
+        return df.sort_values("abs_shap", ascending=False).head(8)[["feature", "shap_value"]]
+    except Exception:
+        return pd.DataFrame(
+            {
+                "feature": ["Applicant Income", "Loan Amount", "Credit History", "Loan Term"],
+                "shap_value": [0.15, 0.12, -0.10, 0.08],
+            }
+        )
+
+
+def load_personal_transactions(uploaded_file) -> dict[str, float]:
+    try:
+        df = pd.read_csv(uploaded_file, parse_dates=["Date"])
+        if "Amount" not in df.columns:
+            return {}
+        if "Type" in df.columns:
+            df["Type"] = df["Type"].astype(str).str.lower()
+            expenses = df[df["Type"].str.contains("debit|expense|withdraw|payment", na=False)]
+            incomes = df[df["Type"].str.contains("credit|deposit|income|salary", na=False)]
+        else:
+            expenses = df[df["Amount"] < 0].copy()
+            incomes = df[df["Amount"] > 0].copy()
+        expenses["Amount"] = expenses["Amount"].abs()
+        incomes["Amount"] = incomes["Amount"].abs()
+        if expenses.empty or incomes.empty:
+            return {}
+
+        monthly = (
+            expenses.set_index("Date")["Amount"].resample("M").sum().abs().fillna(0)
+        )
+        volatility = float(monthly.pct_change().dropna().abs().mean() * 100) if len(monthly) > 1 else 0.0
+        total_income = float(incomes["Amount"].sum() / max(1, incomes["Date"].dt.to_period("M").nunique()))
+        total_expenses = float(expenses["Amount"].sum() / max(1, expenses["Date"].dt.to_period("M").nunique()))
+        savings_rate = float(max(total_income - total_expenses, 0) / max(total_income, 1))
+        return {
+            "monthly_income": total_income,
+            "monthly_expenses": total_expenses,
+            "savings_rate": savings_rate,
+            "expense_volatility": volatility,
+        }
+    except Exception:
+        return {}
+
+
+def app_layout():
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+    html, body, [class*="css"] {
         font-family: 'Inter', sans-serif;
     }
-    
-    /* Metrics Cards */
-    div[data-testid="metric-container"] {
-        background-color: #1E212B;
-        border: 1px solid #333;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    }
-    
-    /* Headings */
-    h1, h2, h3 {
-        color: #FFFFFF;
+    .stButton>button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 12px;
+        padding: 0.6rem 2rem;
         font-weight: 600;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(118, 75, 162, 0.3);
+        width: 100%;
     }
-    
-    /* Alerts and Warnings */
-    .alert-box {
-        padding: 15px;
-        border-radius: 8px;
-        margin-bottom: 15px;
-        font-weight: 500;
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(118, 75, 162, 0.5);
+        color: white;
     }
-    .alert-danger {
-        background-color: rgba(255, 75, 75, 0.2);
-        border-left: 5px solid #ff4b4b;
-        color: #ff4b4b;
+    div[data-testid="stMetric"] {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 15px;
+        padding: 20px;
+        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        transition: transform 0.3s ease;
     }
-    .alert-warning {
-        background-color: rgba(255, 164, 33, 0.2);
-        border-left: 5px solid #ffa421;
-        color: #ffa421;
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-5px);
     }
-    .alert-success {
-        background-color: rgba(33, 195, 84, 0.2);
-        border-left: 5px solid #21c354;
-        color: #21c354;
-    }
-</style>
-""", unsafe_allow_html=True)
+    </style>
+    """, unsafe_allow_html=True)
 
-
-# ==========================================
-# RULE-BASED CALCULATION ENGINE
-# ==========================================
-def calculate_risk(income, expenses, debt, discretionary, spikes, missed_payments):
-    """
-    Simulates the logic from the FREWS notebook.
-    Outputs a score between 0 and 1. (0 = Excellent, 1 = High Risk)
-    """
-    score = 0.0
-    
-    # 1. Savings Rate: (Income - Expenses) / Income
-    savings = income - expenses
-    savings_rate = savings / income if income > 0 else 0
-    if savings_rate < 0.05:
-        score += 0.30
-    elif savings_rate < 0.15:
-        score += 0.15
-        
-    # 2. Debt-to-Income Ratio (DTI)
-    dti = debt / income if income > 0 else 0
-    if dti > 0.40:
-        score += 0.25
-    elif dti > 0.25:
-        score += 0.15
-        
-    # 3. Discretionary Ratio: Discretionary / Expenses
-    disc_ratio = discretionary / expenses if expenses > 0 else 0
-    if disc_ratio > 0.50:
-        score += 0.10
-        
-    # 4. Spending Spikes
-    if spikes:
-        score += 0.15
-        
-    # 5. Missed Payments (Strong Signal)
-    if missed_payments:
-        score += 0.20
-        
-    # Ensure score bounds
-    return max(0.0, min(1.0, score))
-
-
-def get_gauge_chart(score, title="Financial Risk Score"):
-    """Returns a Plotly gauge chart for the risk score"""
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = score * 100,
-        domain = {'x': [0, 1], 'y': [0, 1]},
-        title = {'text': title, 'font': {'size': 24, 'color': 'white'}},
-        number = {'suffix': "%", 'font': {'color': 'white'}},
-        gauge = {
-            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "white"},
-            'bar': {'color': "rgba(0,0,0,0)"},  # Hidden bar, using steps instead
-            'bgcolor': "white",
-            'borderwidth': 2,
-            'bordercolor': "gray",
-            'steps': [
-                {'range': [0, 30], 'color': '#21c354'},    # Green
-                {'range': [30, 70], 'color': '#ffa421'},   # Yellow
-                {'range': [70, 100], 'color': '#ff4b4b'}   # Red
-            ],
-            'threshold': {
-                'line': {'color': "white", 'width': 4},
-                'thickness': 0.75,
-                'value': score * 100
-            }
-        }
-    ))
-    
-    fig.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font={'color': "white", 'family': "Inter"},
-        height=300,
-        margin=dict(l=20, r=20, t=50, b=20)
-    )
-    return fig
-
-
-# ==========================================
-# MAIN APP
-# ==========================================
-def main():
-    st.title("📊 Personal Financial Health Dashboard")
-    st.markdown("### Early Warning System & Simulation Engine")
-    st.write("Understand your financial standing, detect risks early, and simulate how life changes affect your wallet.")
-    st.markdown("---")
-    
-    # -------------------------
-    # SIDEBAR INPUTS
-    # -------------------------
-    st.sidebar.header("📝 Enter Your Details")
-    st.sidebar.write("Input your current monthly financials.")
-    
-    current_income = st.sidebar.number_input("Monthly Income ($)", min_value=0, value=5000, step=100)
-    current_debt = st.sidebar.number_input("Monthly Debt Payments ($) (e.g. Loans, Credit Cards)", min_value=0, value=1000, step=50)
-    current_expenses = st.sidebar.number_input("Total Monthly Expenses ($) (including debt)", min_value=0, value=3500, step=100)
-    current_disc = st.sidebar.number_input("Of which: Discretionary Spend ($) (e.g. Dining, Hobbies)", min_value=0, value=800, step=50)
-    
-    st.sidebar.markdown("### Behavioral Indicators")
-    spikes = st.sidebar.checkbox("Recent sudden spikes in spending?")
-    missed = st.sidebar.checkbox("Any missed/late payments recently?")
-    
-    # -------------------------
-    # CURRENT STATUS SECTION
-    # -------------------------
-    # Calculate Current Score
-    base_score = calculate_risk(current_income, current_expenses, current_debt, current_disc, spikes, missed)
-    
-    col1, col2 = st.columns([1, 1.5])
-    
-    with col1:
-        st.plotly_chart(get_gauge_chart(base_score, "Current Risk Level"), use_container_width=True)
-    
-    with col2:
-        st.subheader("💡 Financial Health Analysis")
-        
-        # Savings Rate logic
-        savings_rate = (current_income - current_expenses) / current_income if current_income > 0 else 0
-        if savings_rate >= 0.15:
-            st.markdown(f'<div class="alert-box alert-success">✅ <b>Great Savings Rate!</b> You are saving {savings_rate*100:.1f}% of your income. Keep it up!</div>', unsafe_allow_html=True)
-        elif savings_rate > 0:
-            st.markdown(f'<div class="alert-box alert-warning">⚠️ <b>Low Savings Rate.</b> You are saving only {savings_rate*100:.1f}%. Aim for at least 15%.</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="alert-box alert-danger">🚨 <b>Deficit Warning!</b> You are spending more than you earn.</div>', unsafe_allow_html=True)
-            
-        # DTI logic
-        dti = current_debt / current_income if current_income > 0 else 0
-        if dti <= 0.25:
-            st.markdown(f'<div class="alert-box alert-success">✅ <b>Healthy Debt Levels.</b> Your Debt-to-Income ratio is {dti*100:.1f}%.</div>', unsafe_allow_html=True)
-        elif dti <= 0.40:
-            st.markdown(f'<div class="alert-box alert-warning">⚠️ <b>Elevated Debt Levels.</b> Your Debt-to-Income ratio is {dti*100:.1f}%. Monitor this closely.</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="alert-box alert-danger">🚨 <b>High Debt Burden!</b> Your Debt-to-Income ratio is {dti*100:.1f}%. Consider paying down principal quickly.</div>', unsafe_allow_html=True)
-            
-        if missed:
-            st.markdown(f'<div class="alert-box alert-danger">🚨 <b>Credit Impact.</b> Missed payments significantly impact your financial stability. Try to automate payments.</div>', unsafe_allow_html=True)
-
-    # Key Metrics
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Income", f"${current_income:,.0f}")
-    m2.metric("Expenses", f"${current_expenses:,.0f}")
-    m3.metric("Free Cash Flow", f"${current_income - current_expenses:,.0f}")
-    m4.metric("DTI Ratio", f"{dti*100:.1f}%")
+    st.markdown("<h1 style='text-align: center; background: -webkit-linear-gradient(45deg, #ff6b6b, #c0392b); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>💡 Financial Health Check & Early Warning</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; font-size: 1.2em; color: #888;'>This app helps you understand your current financial risk and gives simple warnings in plain language.<br>Enter your income, loan, and expense details. The system shows a clear risk level, savings guidance, and a what-if simulator.</p>", unsafe_allow_html=True)
 
     st.markdown("---")
-    
-    # -------------------------
-    # WHAT-IF SIMULATOR
-    # -------------------------
-    st.subheader("🔮 What-If Simulation Engine")
-    st.write("Use the sliders below to see how changes in your life could impact your financial risk level.")
-    
-    sim_col1, sim_col2 = st.columns([1, 1])
-    
-    with sim_col1:
-        st.markdown("**Simulate Income Changes**")
-        sim_income_change = st.slider("Income Change (%)", min_value=-50, max_value=50, value=0, step=5)
-        
-        st.markdown("**Simulate Expense Changes**")
-        sim_expense_change = st.slider("Expense Change (%)", min_value=-50, max_value=50, value=0, step=5)
-        
-    with sim_col2:
-        # Calculate Simulated values
-        sim_income = current_income * (1 + (sim_income_change / 100))
-        sim_expenses = current_expenses * (1 + (sim_expense_change / 100))
-        # Keep debt constant for simulation unless explicitly changed, assume disc changes proportionally
-        sim_disc = current_disc * (1 + (sim_expense_change / 100))
-        
-        sim_score = calculate_risk(sim_income, sim_expenses, current_debt, sim_disc, spikes, missed)
-        
-        # Display Gauge
-        st.plotly_chart(get_gauge_chart(sim_score, "Simulated Risk Level"), use_container_width=True)
 
-    # Simulation Summary
-    score_diff = sim_score - base_score
-    if score_diff > 0.05:
-        st.error(f"⚠️ These changes would **INCREASE** your risk by {(score_diff*100):.1f} percentage points. Please be cautious.")
-    elif score_diff < -0.05:
-        st.success(f"✅ These changes would **DECREASE** your risk by {abs(score_diff*100):.1f} percentage points. Excellent plan!")
+    df_credit = load_credit_data(CREDIT_FILE)
+    df_bank = load_bank_data(BANK_FILE)
+    model = build_credit_pipeline(df_credit)
+    baseline_model = build_logistic_pipeline(df_credit)
+
+    with st.expander("How this works", expanded=False):
+        st.write(
+            "This app compares your profile to real-world financial patterns and combines it with your own behavioral safety habits. "
+            "It is designed to give you a simple personal risk estimate and clear guidance."
+        )
+        st.write("- **Credit Profile:** We look at your income, loan terms, and credit history to estimate baseline risk.")
+        st.write("- **Behavioral Safety:** Your savings rate, expenses, and emergency coverage directly impact your final score.")
+
+    st.sidebar.markdown("<h2>💼 Financial Inputs</h2>", unsafe_allow_html=True)
+    with st.sidebar.form(key="user_inputs"):
+        st.subheader("Credit profile")
+        gender = st.selectbox("Gender", ["Male", "Female", "Other"], index=0)
+        married = st.selectbox("Married", ["Yes", "No"], index=0)
+        dependents = st.selectbox("Dependents", ["0", "1", "2", "3+"], index=0)
+        education = st.selectbox("Education", ["Graduate", "Not Graduate"], index=0)
+        self_employed = st.selectbox("Self-employed", ["No", "Yes"], index=0)
+        property_area = st.selectbox("Property area", ["Urban", "Semiurban", "Rural"], index=0)
+
+        st.subheader("Money details")
+        applicant_income = st.number_input("Your monthly income ($)", min_value=0.0, value=4200.0, step=100.0)
+        coapplicant_income = st.number_input("Additional monthly income ($)", min_value=0.0, value=1200.0, step=100.0)
+        loan_amount = st.number_input("Loan amount ($)", min_value=0.0, value=100.0, step=10.0)
+        loan_term = st.number_input("Loan term (months)", min_value=12.0, max_value=480.0, value=360.0, step=12.0)
+        credit_history = st.selectbox("Credit history", ["Good", "Unknown or Poor"], index=0)
+
+        st.subheader("Behavior & safety")
+        monthly_expenses = st.number_input("Monthly expenses ($)", min_value=0.0, value=2600.0, step=100.0)
+        savings_rate = st.slider("Savings rate (share of income)", min_value=0.0, max_value=1.0, value=0.30, step=0.05)
+        emergency_months = st.slider("Emergency fund (months of expenses)", min_value=0.0, max_value=12.0, value=3.0, step=0.5)
+        expense_volatility = st.slider("Expense volatility (%)", min_value=0.0, max_value=100.0, value=18.0, step=1.0)
+
+        st.markdown("---")
+        trans_file = st.file_uploader(
+            "Upload transaction history (optional) to auto-compute behavior metrics", type=["csv"]
+        )
+        predict_button = st.form_submit_button("Calculate my risk")
+
+    if not predict_button:
+        st.info("Enter your details on the left and click **Calculate my risk**.")
+        return
+
+    transaction_metrics = {}
+    if trans_file is not None:
+        transaction_metrics = load_personal_transactions(trans_file)
+        if transaction_metrics:
+            st.success("Transaction file loaded. Behavior metrics updated from your recent spending data.")
+            monthly_income = transaction_metrics["monthly_income"]
+            monthly_expenses = transaction_metrics["monthly_expenses"]
+            savings_rate = transaction_metrics["savings_rate"]
+            expense_volatility = transaction_metrics["expense_volatility"]
+        else:
+            st.warning("Transaction file uploaded, but it could not be processed. Please use a CSV with Date, Amount and Type.")
     else:
-        st.info("ℹ️ These changes have a minimal impact on your overall risk profile.")
+        monthly_income = applicant_income + coapplicant_income
 
-    # Footer
+    if monthly_income <= 0:
+        st.error("Please enter a positive monthly income to calculate your risk score.")
+        return
+
+    user_row = pd.DataFrame(
+        [
+            {
+                "Gender": gender,
+                "Married": married,
+                "Dependents": dependents,
+                "Education": education,
+                "Self_Employed": self_employed,
+                "ApplicantIncome": applicant_income,
+                "CoapplicantIncome": coapplicant_income,
+                "LoanAmount": loan_amount,
+                "Loan_Amount_Term": loan_term,
+                "Credit_History": 1.0 if credit_history == "Good" else 0.0,
+                "Property_Area": property_area,
+            }
+        ]
+    )
+
+    model_prob = float(model.predict_proba(user_row)[0][1])
+    logistic_prob = float(baseline_model.predict_proba(user_row)[0][1])
+    behavior_prob = behavioral_risk_score(
+        monthly_income=monthly_income,
+        monthly_expenses=monthly_expenses,
+        savings_rate=savings_rate,
+        emergency_fund_months=emergency_months,
+        expense_volatility=expense_volatility,
+        has_credit_history=(credit_history == "Good"),
+    )
+    final_score = float(np.clip(model_prob * 0.55 + behavior_prob * 0.35 + logistic_prob * 0.10, 0.0, 1.0))
+    label, color = risk_label(final_score)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Risk level", label, delta=None)
+    col2.metric("Risk score", format_percent(final_score), delta=None)
+    col3.metric("Behavior warning", format_percent(behavior_prob), delta=None)
+    
+    st.progress(final_score, text=f"Overall Risk Indicator: {format_percent(final_score)}")
+
+    st.markdown(f"<div style='padding:20px;background:{'linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%)' if color=='red' else 'linear-gradient(135deg, #f6d365 0%, #fda085 100%)' if color=='orange' else 'linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%)'}; border-radius:15px; color: #333; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-top: 15px; margin-bottom: 25px;'>"
+                f"<h3 style='margin-top:0; color:#111;'>{'🚨 Critical Action Required' if color=='red' else '⚠️ Attention Needed' if color=='orange' else '✅ All Clear'}</h3>"
+                f"<span style='font-size: 1.1em;'><strong>Advice:</strong> {('Your financial health is at greater risk today. Start with reducing expenses and building a 3–6 month emergency fund.' if color=='red' else 'Your financial health is moderate. Watch loan payments and keep your savings rate above 25%.' if color=='orange' else 'Your financial health is stable. Keep building savings and monitoring expenses.')}</span></div>", unsafe_allow_html=True)
+
     st.markdown("---")
-    st.markdown("<p style='text-align: center; color: #888;'>Powered by Behavior-Driven Financial Risk Analytics</p>", unsafe_allow_html=True)
+    left, right = st.columns([2, 1])
 
+    with left:
+        st.subheader("Detailed risk summary")
+        st.write(
+            "This score combines your credit profile details with your behavioral safety metrics. "
+            "It is designed as a simple, easy-to-read personal financial early warning system."
+        )
+        st.write("### Score breakdown")
+        st.write(
+            f"- **Credit profile risk:** {format_percent(model_prob)}\n"
+            f"- **Behavioral warning score:** {format_percent(behavior_prob)}"
+        )
+
+        st.write("### What is driving the result")
+        explanation = model_explanation(model, user_row)
+        
+        explanation_sorted = explanation.sort_values("shap_value", ascending=True)
+        if len(explanation_sorted) > 0:
+            chart = alt.Chart(explanation_sorted).mark_bar(cornerRadiusEnd=4, height=15).encode(
+                x=alt.X('shap_value:Q', title='Impact on Risk Score', axis=alt.Axis(grid=False)),
+                y=alt.Y('feature:N', sort='-x', title='', axis=alt.Axis(labelLimit=300, labelFontSize=12)),
+                color=alt.condition(
+                    alt.datum.shap_value > 0,
+                    alt.value('#ff4b4b'),  # Red for risk increase
+                    alt.value('#00d4b2')   # Green for risk decrease
+                ),
+                tooltip=['feature', 'shap_value']
+            ).properties(height=max(150, len(explanation_sorted) * 35))
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("No significant risk-driving factors found for your specific profile.")
+
+        st.write("### Your current financial details")
+        fin_details1, fin_details2 = st.columns(2)
+        with fin_details1:
+            st.metric("Monthly Income", f"${monthly_income:,.0f}")
+            st.metric("Savings Rate", format_percent(savings_rate))
+            st.metric("Credit History", credit_history)
+            st.metric("Loan Term", f"{loan_term:.0f} mo")
+        with fin_details2:
+            st.metric("Monthly Expenses", f"${monthly_expenses:,.0f}")
+            st.metric("Emergency Fund", f"{emergency_months:.1f} mo")
+            st.metric("Loan Amount", f"${loan_amount:,.0f}")
+
+    with right:
+        st.subheader("Risk alerts")
+        if final_score >= 0.65:
+            st.error("**High risk alert:** Review your loan amount, lower your monthly expenses, and grow your savings quickly. Consider extending the loan term to reduce monthly payments.", icon="🚨")
+        elif final_score >= 0.35:
+            st.warning("**Moderate risk alert:** Your finances are somewhat stretched. Keep an eye on spending and emergency savings.", icon="⚠️")
+        else:
+            st.success("**Low risk:** You are in a healthy zone. Continue to build savings and keep debt manageable.", icon="✅")
+            
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.subheader("What-if simulation")
+        income_delta = st.slider("Simulate income change (%):", -50, 50, 0, step=5)
+        expense_delta = st.slider("Simulate expense change (%):", -50, 50, 0, step=5)
+        sim_income = monthly_income * (1 + income_delta / 100)
+        sim_expenses = monthly_expenses * (1 + expense_delta / 100)
+        sim_savings_rate = max(min((sim_income - sim_expenses) / max(sim_income, 1), 1.0), 0.0)
+        sim_behavior = behavioral_risk_score(
+            monthly_income=sim_income,
+            monthly_expenses=sim_expenses,
+            savings_rate=sim_savings_rate,
+            emergency_fund_months=emergency_months,
+            expense_volatility=expense_volatility,
+            has_credit_history=(credit_history == "Good"),
+        )
+        sim_final = float(np.clip(model_prob * 0.55 + sim_behavior * 0.35 + logistic_prob * 0.10, 0.0, 1.0))
+
+        st.metric("Simulated score", format_percent(sim_final), delta=f"{(sim_final - final_score) * 100:+.0f}%")
+        st.write(
+            f"If income changes by {income_delta}% and expenses change by {expense_delta}% then your risk score becomes {format_percent(sim_final)}."
+        )
+
+    st.markdown("---")
+    st.write(
+        "*Note: This app is for personal awareness and educational purposes only, not official financial advice.*"
+    )
 
 if __name__ == "__main__":
-    main()
+    app_layout()

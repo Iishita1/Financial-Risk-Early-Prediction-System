@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Financial Health Assessment</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Financial Health Assessment</h1>
+            <p>Comprehensive analysis of your financial well-being</p>
+        </header>
+
+        <main>
+            <!-- INPUT FORM -->
+            <section class="form-section">
+                <div class="form-container">
+                    <h2>Financial Information</h2>
+                    
+                    <form id="healthForm">
+                        <div class="form-group">
+                            <label for="monthly_income">Monthly Income ($)</label>
+                            <input type="number" id="monthly_income" name="monthly_income" 
+                                   placeholder="5000" min="0" step="100" required>
+                            <small>Net income after taxes and deductions</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="monthly_expenses">Monthly Expenses ($)</label>
+                            <input type="number" id="monthly_expenses" name="monthly_expenses" 
+                                   placeholder="3200" min="0" step="100" required>
+                            <small>Total recurring monthly spending</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="savings">Emergency Savings ($)</label>
+                            <input type="number" id="savings" name="savings" 
+                                   placeholder="15000" min="0" step="100" required>
+                            <small>Liquid savings available for emergencies</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="debts">Total Debt Outstanding ($)</label>
+                            <input type="number" id="debts" name="debts" 
+                                   placeholder="25000" min="0" step="100" required>
+                            <small>Credit cards, loans, mortgages, and other liabilities</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="credit_score">Credit Score</label>
+                            <input type="number" id="credit_score" name="credit_score" 
+                                   placeholder="720" min="300" max="850" step="10" required>
+                            <small>FICO score from credit bureau (300-850 range)</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="employment_type">Employment Status</label>
+                            <select id="employment_type" name="employment_type" required>
+                                <option value="employed">Full-time Employment</option>
+                                <option value="part_time">Part-time Employment</option>
+                                <option value="self_employed">Self-employed</option>
+                                <option value="retired">Retired</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="dependents">Financial Dependents</label>
+                            <input type="number" id="dependents" name="dependents" 
+                                   placeholder="1" min="0" max="20" step="1" required>
+                            <small>Number of people depending on your income</small>
+                        </div>
+
+                        <button type="submit" class="submit-btn">Generate Assessment</button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- RESULTS SECTION -->
+            <section id="resultsSection" class="results-section" style="display:none;">
+                <div class="results-container">
+                    
+                    <!-- SCORE CARD -->
+                    <div class="score-card">
+                        <div class="score-display">
+                            <div class="score-circle" id="scoreCircle">
+                                <span class="score-value" id="scoreValue">-</span>
+                                <span class="score-label">/ 100</span>
+                            </div>
+                        </div>
+                        <div class="score-text">
+                            <h2 id="riskText">-</h2>
+                            <p id="riskDescription">-</p>
+                        </div>
+                    </div>
+
+                    <!-- BREAKDOWN -->
+                    <div class="breakdown">
+                        <h3>Assessment Breakdown</h3>
+                        <div class="breakdown-grid" id="breakdownGrid">
+                            <!-- Filled by JS -->
+                        </div>
+                    </div>
+
+                    <!-- KEY FINDINGS -->
+                    <div class="issues">
+                        <h3>Key Findings</h3>
+                        <ul id="issuesList">
+                            <!-- Filled by JS -->
+                        </ul>
+                    </div>
+
+                    <!-- RECOMMENDATIONS -->
+                    <div class="actions">
+                        <h3>Recommended Actions</h3>
+                        <ul id="actionsList">
+                            <!-- Filled by JS -->
+                        </ul>
+                    </div>
+
+                    <!-- FINANCIAL SUMMARY -->
+                    <div class="summary">
+                        <h3>Financial Summary</h3>
+                        <div class="stats-grid">
+                            <div class="stat">
+                                <span class="stat-label">Monthly Income</span>
+                                <span class="stat-value" id="statIncome">-</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Monthly Expenses</span>
+                                <span class="stat-value" id="statExpenses">-</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Monthly Surplus</span>
+                                <span class="stat-value" id="statSurplus">-</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Months Covered</span>
+                                <span class="stat-value" id="statMonths">-</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="button" id="resetBtn" class="reset-btn">Start New Assessment</button>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Disclaimer: This assessment tool provides general financial guidance. For personalized financial advice, consult with a qualified financial advisor.</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
